@@ -1,0 +1,366 @@
+---
+title: Coursera - Data Science Specialization - Practical Machine Learning - Peer
+  Graded Assignment
+author: "Antonio Belard"
+date: "9 de Maio de 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(caret)
+library(RColorBrewer)
+library(rattle)
+library(rpart)
+library(randomForest)
+library(gbm)
+
+```
+
+# Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. 
+
+These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The goal of this project is to classify (predict) the manner in which they did the exercise. This is the "classe" variable in the training set. 
+
+For that matter we will build, analyze and compare the following classifiers:
+
+* A Decision Tree classifier
+* A Random Forest classifier
+* A Gradient Boosting Machine classifier
+
+We will then choose the best one of them and procede using it to predict 20 new and different test cases.   
+
+
+
+# Data Inspection
+The data to be used comes in two files:
+
+* <b>"pml-training.csv":</b> Data that will be used to train and test the classifiers
+* <b>"pml-testing.csv":</b>  Data that will serve to predict the 20 new and different test cases.
+
+We start by inspecting the two files in a text editor. 
+
+From that inspection we can see that:
+
+* The data features separator is a comma
+* There are several missing values in the dataset, the usual NAs as well as some other '#DIV/0!' that seem to be the result of formula error on excel
+* The file has a header with  the features names
+* The first feature of the dataset is actually the row number
+
+
+
+# Data Loading
+Based on what we have learned at data inspection we load both datasets.
+```{r, cache=TRUE, echo=TRUE}
+
+training <- read.table("pml-training.csv", header = TRUE, sep = ",", na.strings = c("NA", "#DIV/0!", ""))
+testing <- read.table("pml-testing.csv", header = TRUE, sep = ",", na.strings = c("NA", "#DIV/0!", ""))
+
+training.dims <- dim(training)
+testing.dims <- dim(testing)
+
+training.rows <- training.dims[1]
+training.features <- training.dims[2] 
+
+testing.rows <- testing.dims[1]
+testing.features <- testing.dims[2] 
+```
+
+We can see that:
+
+* The training dataset has <b>`r training.rows` rows</b> with <b>`r training.features` features</b>
+* The testing dataset has <b>`r testing.rows` rows</b> with <b>`r testing.features` features</b>
+
+
+
+# Data Cleansing (see Appendix - Data Cleansing)
+We will now procede to clean both datasets.
+First we take a look the training dataset structure.
+```{r, results='hide', cache=TRUE, echo=FALSE}
+
+data_before_cleansing <- training
+
+```
+
+We can see that:
+
+* Feature number one, <b>'x'</b>, is just the row number
+* Feature number two, <b>'user_name'</b>, is just the user name, it does n't have any predictive power.
+* Features number three to seven, <b>raw_timestamp_part_1</b>, <b>raw_timestamp_part_2</b>, <b>cvtd_timestamp</b>, <b>new_window</b>, and <b>num_window</b>, are not sensor related, they are time related and since the dataset doesn't seem to have any time-dependence these features can be simply ignored
+* Finally, not all of the existing features will be considered, we will discard features that either contains NA or are not in the testing dataset. 
+
+```{r, cache=TRUE, echo=TRUE}
+
+considered.features <- names(testing[,colSums(is.na(testing)) == 0])[8:59]
+
+training <- training[, c(considered.features,"classe")]
+testing <- testing[, c(considered.features,"problem_id")]
+
+training.dims <- dim(training)
+testing.dims <- dim(testing)
+
+training.rows <- training.dims[1]
+training.features <- training.dims[2] 
+
+testing.rows <- testing.dims[1]
+testing.features <- testing.dims[2] 
+
+
+```
+
+```{r, results='hide', cache=TRUE, echo=FALSE}
+
+data_after_cleansing <- training
+
+```
+
+
+We see that now, after cleaning the data:
+
+* The training dataset has <b>`r training.rows` rows</b> with <b>`r training.features` features</b>
+* The testing dataset has <b>`r testing.rows` rows</b> with <b>`r testing.features` features</b>
+
+
+
+# Dataset Partitioning
+We are now going to split the training dataset in two parts:
+
+* 80% of the training dataset data will be used for training the classifiers
+* The remaining 20% of the training dataset data will be use for testing the resulting classifiers
+
+<b>Note that this data split on the training dataset data should not be mistaken for the data in the final testing dataset that will be used to make the required new predictions.</b>
+
+```{r, cache=TRUE, echo=TRUE}
+
+# reproducibility concerns
+set.seed(666)
+
+inTrain <- createDataPartition(training$classe, p=0.80, list=FALSE)
+training.train <- training[inTrain, ]
+training.test <- training[-inTrain, ]
+
+training.train.dims <- dim(training.train)
+training.train.rows <- training.train.dims[1]
+training.train.features <- training.train.dims[2] 
+
+training.test.dims <- dim(training.test)
+training.test.rows <- training.test.dims[1]
+training.test.features <- training.test.dims[2] 
+
+```
+
+After the training dataset split:
+
+* The dataset for training the classifiers has <b>`r training.train.rows` rows</b> with <b>`r training.train.features` features</b>
+* The dataset for testing the classifiers has <b>`r training.test.rows` rows</b> with <b>`r training.test.features` features</b>
+
+
+
+# Classifiers
+We will now build three classifiers on the training dataset: 
+
+* A Decision Tree classifier
+* A Random Forest Classifier
+* A Gradient Boosting Machine Classifier
+
+<b>Each classifier will be built using 10-fold cross-validation.</b>
+
+
+We will plot and evaluate each of the trained classifiers, and finally choose the best one to make the required new predictions.
+
+The criteria for choosing the best classifier will be based on:
+
+* The obtained classifier <b>accuracy value</b>
+* The obtained classifier <b>kappa value</b> (the classifier accuracy corrected for chance)
+
+
+## The Decision Tree Classifier (see Appendix - The Decision Tree Classifier)
+We will now build, plot, and evaluate a Decision Tree Classifier on the training dataset.
+
+###  Building the Decision Tree Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+trControl.decision.tree <- rpart.control(method = "cv", number = 10)
+decision.tree.classifier <- rpart(classe ~ ., data = training.train, method="class", control = trControl.decision.tree)
+print(decision.tree.classifier)
+
+```
+
+###  Plotting the Decision Tree Classifier
+```{r, warning=FALSE, echo=TRUE}
+
+fancyRpartPlot(decision.tree.classifier)
+
+```
+
+
+
+###  Evaluating the Decision Tree Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+decision.tree.classifier.prediction <- predict(decision.tree.classifier, training.test, type = "class")
+decision.tree.classifier.confusion.matrix <- confusionMatrix(decision.tree.classifier.prediction, training.test$classe)
+
+decision.tree.classifier.accuracy <- decision.tree.classifier.confusion.matrix$overall['Accuracy']
+decision.tree.classifier.k <- decision.tree.classifier.confusion.matrix$overall['Kappa']
+
+decision.tree.classifier.confusion.matrix
+
+```
+
+We can see that the Decision Tree Classifier has:
+
+* An obtained <b>accuracy value of `r round(decision.tree.classifier.accuracy * 100, 2)`%</b>
+* An obtained <b>kappa value of `r round(decision.tree.classifier.k * 100, 2)`%</b>
+
+
+
+## The Random Forest Classifier (see Appendix - The Random Forest Classifier)
+We will now build, plot, and evaluate a Random Forest Classifier on the training dataset.
+
+###  Building the Random Forest Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+trControl.random.forest <- trainControl(method = "cv", classProbs=TRUE, savePredictions=TRUE, allowParallel=TRUE, number = 10, search = "grid")
+
+random.forest.classifier <- randomForest(classe ~ ., data = training.train, method = "rf", importance = TRUE, trControl = trControl.random.forest, proximity=TRUE)
+
+print(random.forest.classifier)
+
+```
+
+###  Plotting the Random Forest Classifier
+```{r, cache=TRUE, echo=TRUE}
+layout(matrix(c(1,2),nrow=1), width=c(5,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(random.forest.classifier, main="Random Forest Classifier", log="y")
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("top", colnames(random.forest.classifier$err.rate),col=1:5,cex=0.8,fill=1:5)
+
+```
+
+In the plot we can see that:
+
+* The Out-of-bag error (OOB) is very low, 0.41%
+* The Classifier predicts some classes better than others, classe 'A' being the better predicted and classe 'D' being the worse predicted.
+
+
+###  Evaluating the Random Forest Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+random.forest.classifier.prediction <- predict(random.forest.classifier, training.test, type = "class")
+random.forest.classifier.confusion.matrix <- confusionMatrix(random.forest.classifier.prediction, training.test$classe)
+
+random.forest.classifier.accuracy <- random.forest.classifier.confusion.matrix$overall['Accuracy']
+random.forest.classifier.k <- random.forest.classifier.confusion.matrix$overall['Kappa']
+
+random.forest.classifier.confusion.matrix
+
+```
+
+We can see that the Random Forest Classifier has:
+
+* An obtained <b>accuracy value of `r round(random.forest.classifier.accuracy * 100, 2)`%</b>
+* An obtained <b>kappa value of `r round(random.forest.classifier.k * 100, 2)`%</b>
+
+
+
+## The Gradient Boosting Machine Classifier
+We will now build, plot, and evaluate a Gradient Boosting Machine Classifier on the training dataset.
+
+###  Building the Gradient Boosting Machine Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+trControl.boosting <- trainControl(method = "cv", number = 10)
+boosting.classifier <- train(classe ~ ., method = "gbm", data = training.test, verbose = FALSE, trControl = trControl.boosting)
+
+boosting.classifier
+
+```
+
+###  Plotting the Gradient Boosting Machine Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+plot(boosting.classifier)
+
+```
+
+In the plot we can see that the Gradient Boosting Machine Classifier accuracy grows both with tree depth and boosting interactions.
+
+
+###  Evaluating the Gradient Boosting Machine Classifier
+```{r, cache=TRUE, echo=TRUE}
+
+boosting.classifier.prediction <- predict(boosting.classifier, training.test)
+boosting.classifier.confusion.matrix <- confusionMatrix(boosting.classifier.prediction, training.test$classe)
+
+boosting.classifier.accuracy <- boosting.classifier.confusion.matrix$overall['Accuracy']
+boosting.classifier.k <- boosting.classifier.confusion.matrix$overall['Kappa']
+
+boosting.classifier.confusion.matrix
+
+```
+
+We can see that the Gradient Boosting Machine classifier has:
+
+* An obtained <b>accuracy value of `r round(boosting.classifier.accuracy * 100, 2)`%</b>
+* An obtained <b>kappa value of `r round(boosting.classifier.k * 100, 2)`%</b>
+
+
+
+##  Choosing the Best Classifier
+<b>Without further parametrization of the classifiers</b> and comparing the obtained values we can see that:
+
+* The <b>best</b> one is the <b>Random Forest Classifier</b> with an <b>accuracy value of `r round(random.forest.classifier.accuracy * 100, 2)`%</b> and a <b>kappa value of `r round(random.forest.classifier.k * 100, 2)`%</b>
+* The <b>second best</b> is the <b>Gradient Boosting Machine Classifier</b> with an <b>accuracy value of `r round(boosting.classifier.accuracy * 100, 2)`%</b> and a <b>kappa value of `r round(boosting.classifier.k * 100, 2)`%</b>
+* Lastly, being the <b>worse</b> of them all, comes the <b>Decision Tree Classifier</b> with an <b>accuracy value of `r round(decision.tree.classifier.accuracy * 100, 2)`%</b> and a <b>kappa value of `r round(decision.tree.classifier.k * 100, 2)`%</b>
+
+<b>Note that normally, with further parametrization, it would be expected that the Gradient Boosting Machine performs better than the Random Forest Tree classifier.</b>
+
+##  Making New Predictions
+We are now going to make the required new predictions by using the the <b>Random Forest Classifier.</b>
+```{r, cache=TRUE, echo=TRUE}
+
+
+random.forest.prediction.on.testing.data <- predict(random.forest.classifier, testing)
+random.forest.prediction.on.testing.data
+```
+
+
+# Appendix
+
+##  Data Cleansing
+
+### Data Structure Before Cleansing
+```{r, cache=TRUE, echo=TRUE}
+
+str(data_before_cleansing)
+
+```
+
+
+### Data Structure After Cleansing
+```{r, cache=TRUE, echo=TRUE}
+
+str(data_after_cleansing)
+
+```
+
+
+##  The Random Forest Classifier
+
+### Features Importance
+```{r, cache=TRUE, echo=TRUE}
+
+varImpPlot(random.forest.classifier, main="Features Importance")
+
+```
+
